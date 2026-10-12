@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Free Spoofer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --text:#16181d; --muted:#6b7280; --line:#e3e6ea; --accent:#2563eb; --danger:#dc2626; --ok:#16a34a; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --panel:#171a21; --text:#e8eaee; --muted:#9aa1ad; --line:#2a2f3a; --accent:#5b8cff; --danger:#f05252; --ok:#34d27b; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.4 -apple-system, system-ui, sans-serif; background:var(--bg); color:var(--text); display:flex; height:100vh; }
+  #map { flex:1; }
+  aside { width:330px; overflow-y:auto; background:var(--panel); border-left:1px solid var(--line); padding:14px; display:flex; flex-direction:column; gap:14px; }
+  section { display:flex; flex-direction:column; gap:8px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0; }
+  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  button { font:inherit; padding:6px 10px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--text); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--danger); }
+  button.on { outline:2px solid var(--accent); }
+  input, select { font:inherit; padding:6px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--text); min-width:0; }
+  input[type=number] { width:90px; }
+  #status { font-size:13px; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--danger); margin-right:6px; }
+  .dot.ok { background:var(--ok); }
+  #err { color:var(--danger); font-size:12px; white-space:pre-wrap; }
+  .muted { color:var(--muted); font-size:12px; }
+  ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+  li { display:flex; gap:6px; align-items:center; }
+  li span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  progress { width:100%; }
+  #stick { position:absolute; left:16px; bottom:28px; z-index:1000; width:140px; height:140px; border-radius:50%;
+    background:color-mix(in srgb, var(--panel) 80%, transparent); border:1px solid var(--line); box-shadow:0 4px 18px rgba(0,0,0,.25);
+    touch-action:none; user-select:none; cursor:grab; backdrop-filter:blur(6px); }
+  #stick::before { content:''; position:absolute; inset:50% auto auto 50%; width:62px; height:62px; margin:-31px; border-radius:50%; border:1px dashed var(--line); }
+  #knob { position:absolute; left:50%; top:50%; width:56px; height:56px; margin:-28px; border-radius:50%; background:var(--accent);
+    box-shadow:0 3px 10px rgba(0,0,0,.35); pointer-events:none; }
+  #stick.active { cursor:grabbing; }
+  #stickHint { position:absolute; left:16px; bottom:8px; z-index:1000; font-size:11px; color:var(--muted); background:var(--panel); padding:1px 6px; border-radius:5px; }
+  footer { margin-top:auto; padding-top:10px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  footer a { color:var(--text); text-decoration:none; display:inline-flex; align-items:center; gap:5px; font-weight:600; }
+  footer a:hover { color:var(--accent); }
+  footer svg { width:16px; height:16px; fill:currentColor; }
+  @media (max-width:700px) { body { flex-direction:column; } #map { height:50vh; flex:none; } aside { width:100%; border-left:0; } #stick { top:calc(50vh - 168px); bottom:auto; } #stickHint { top:calc(50vh - 24px); bottom:auto; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="stick" title="Drag to walk (or use WASD / arrow keys)"><div id="knob"></div></div>
+<div id="stickHint">Joystick · WASD / arrows</div>
+<aside>
+  <section>
+    <h2>Device</h2>
+    <div id="status"><span class="dot" id="dot"></span><span id="devname">Not connected</span></div>
+    <div class="row"><button class="primary" id="connect">Connect</button><button class="danger" id="clear">Stop spoofing (real GPS)</button></div>
+    <div id="err"></div>
+  </section>
+
+  <section>
+    <h2>Search</h2>
+    <form class="row" id="searchForm"><input id="q" placeholder="Place or lat, lon" style="flex:1"><button>Go</button></form>
+  </section>
+
+  <section>
+    <h2>Map click</h2>
+    <div class="row"><button id="modeTp" class="on">Teleport</button><button id="modeRoute">Add route point</button></div>
+  </section>
+
+  <section>
+    <h2>Speed</h2>
+    <div class="row"><input type="number" id="speed" min="0" step="any" value="5"> km/h <span class="muted">(no limit, changes live)</span></div>
+    <div class="row" id="presets"></div>
+  </section>
+
+  <section>
+    <h2>Route</h2>
+    <div class="row">
+      <label><input type="checkbox" id="roads" checked> Follow roads</label>
+      <select id="profile"><option value="foot">Walk</option><option value="bike">Bike</option><option value="car">Car</option></select>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="loop"> Loop</label>
+      <label><input type="checkbox" id="fromHere" checked> Start from current spot</label>
+    </div>
+    <div class="row"><label>Jitter <input type="number" id="jitter" min="0" step="any" value="0"> m</label></div>
+    <div class="muted" id="routeInfo">0 points</div>
+    <div class="row"><button id="undo">Undo point</button><button id="clearRoute">Clear route</button><label class="row"><input type="file" id="gpx" accept=".gpx" hidden><button id="gpxBtn">Import GPX</button></label></div>
+    <div class="row"><button class="primary" id="go">Start</button><button id="pause">Pause</button><button id="stop">Stop</button></div>
+    <progress id="prog" value="0" max="1"></progress>
+    <div class="muted" id="moveInfo"></div>
+  </section>
+
+  <section>
+    <h2>Saved routes (unlimited)</h2>
+    <div class="row"><input id="routeName" placeholder="Name" style="flex:1"><button id="save">Save</button></div>
+    <ul id="saved"></ul>
+  </section>
+
+  <footer>Made by
+    <a href="https://github.com/bracky-dev" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      bracky-dev
+    </a>
+  </footer>
+</aside>
+
+<script>
+const $ = id => document.getElementById(id);
+const api = async (path, body) => {
+  const r = await fetch('/api/' + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+};
+const showErr = e => { $('err').textContent = e ? (e.message || e) : ''; };
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+const map = L.map('map').setView(store.get('view', [37.7749, -122.4194]), store.get('zoom', 15));
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+map.on('moveend', () => { const c = map.getCenter(); store.set('view', [c.lat, c.lng]); store.set('zoom', map.getZoom()); });
+
+const me = L.circleMarker([0, 0], { radius: 9, color: '#fff', weight: 3, fillColor: '#2563eb', fillOpacity: 1 });
+const waypointLayer = L.layerGroup().addTo(map);
+const pathLine = L.polyline([], { color: '#2563eb', weight: 4, opacity: .7 }).addTo(map);
+let waypoints = [], path = [], mode = 'tp', lastStatus = {};
+
+function setMode(m) { mode = m; $('modeTp').classList.toggle('on', m === 'tp'); $('modeRoute').classList.toggle('on', m === 'route'); }
+$('modeTp').onclick = () => setMode('tp');
+$('modeRoute').onclick = () => setMode('route');
+
+const speedVal = () => Math.max(parseFloat($('speed').value) || 0, 0);
+[['Walk', 5], ['Jog', 10], ['Bike', 20], ['Car', 60], ['Highway', 120], ['Fast', 500], ['Plane', 900]].forEach(([n, v]) => {
+  const b = document.createElement('button'); b.textContent = `${n} ${v}`; b.onclick = () => { $('speed').value = v; pushSettings(); }; $('presets').append(b);
+});
+$('speed').value = store.get('speed', 5);
+const pushSettings = () => { store.set('speed', speedVal()); api('settings', { speed_kmh: speedVal(), loop: $('loop').checked, jitter_m: parseFloat($('jitter').value) || 0 }).catch(showErr); };
+['speed', 'loop', 'jitter'].forEach(id => $(id).addEventListener('change', pushSettings));
+$('speed').addEventListener('input', pushSettings);
+
+let roadTimer;
+function redrawRoute() {
+  waypointLayer.clearLayers();
+  waypoints.forEach((p, i) => L.circleMarker(p, { radius: 6, color: i === 0 ? '#16a34a' : '#f59e0b', fillOpacity: .9 }).bindTooltip(String(i + 1)).addTo(waypointLayer));
+  path = waypoints.slice();
+  pathLine.setLatLngs(path);
+  updateRouteInfo();
+  clearTimeout(roadTimer);
+  if ($('roads').checked && waypoints.length > 1) roadTimer = setTimeout(snapRoads, 300);
+}
+async function snapRoads() {
+  const pts = waypoints.slice();
+  try {
+    const r = await api('road', { points: pts, profile: $('profile').value });
+    if (pts.length === waypoints.length) { path = r.points; pathLine.setLatLngs(path); updateRouteInfo(); showErr(); }
+  } catch (e) { showErr(e); }
+}
+function lengthM(pts) { let d = 0; for (let i = 1; i < pts.length; i++) d += map.distance(pts[i - 1], pts[i]); return d; }
+function fmtDist(m) { return m >= 1000 ? (m / 1000).toFixed(2) + ' km' : Math.round(m) + ' m'; }
+function fmtTime(s) { if (s == null || !isFinite(s)) return '∞'; s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`; }
+function updateRouteInfo() {
+  const d = lengthM(path), v = speedVal() / 3.6;
+  $('routeInfo').textContent = `${waypoints.length} points · ${fmtDist(d)} · ~${fmtTime(v ? d / v : null)} at ${speedVal()} km/h`;
+}
+$('roads').onchange = $('profile').onchange = redrawRoute;
+$('undo').onclick = () => { waypoints.pop(); redrawRoute(); };
+$('clearRoute').onclick = () => { waypoints = []; redrawRoute(); };
+
+map.on('click', async e => {
+  const p = [e.latlng.lat, e.latlng.lng];
+  if (mode === 'route') { waypoints.push(p); redrawRoute(); return; }
+  try { applyStatus(await api('teleport', { lat: p[0], lon: p[1] })); showErr(); } catch (err) { showErr(err); }
+});
+
+$('go').onclick = async () => {
+  if (path.length < 2) return showErr('Add at least 2 route points (switch map click to "Add route point").');
+  let pts = path.slice();
+  if ($('fromHere').checked && lastStatus.position) {
+    let lead = [lastStatus.position, pts[0]];
+    if ($('roads').checked) { try { lead = (await api('road', { points: lead, profile: $('profile').value })).points; } catch {} }
+    pts = lead.concat(pts.slice(1));
+  }
+  try { applyStatus(await api('route', { points: pts, speed_kmh: speedVal(), loop: $('loop').checked, jitter_m: parseFloat($('jitter').value) || 0 })); showErr(); }
+  catch (e) { showErr(e); }
+};
+$('pause').onclick = () => api('settings', { paused: !lastStatus.paused }).then(applyStatus).catch(showErr);
+$('stop').onclick = () => api('stop', {}).then(applyStatus).catch(showErr);
+$('clear').onclick = () => api('clear', {}).then(applyStatus).catch(showErr);
+$('connect').onclick = async () => { $('connect').disabled = true; try { applyStatus(await api('connect', {})); showErr(); } catch (e) { showErr(e); } $('connect').disabled = false; };
+
+$('searchForm').onsubmit = async e => {
+  e.preventDefault();
+  const q = $('q').value.trim(); if (!q) return;
+  const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (m) return map.setView([+m[1], +m[2]], 17);
+  try {
+    const r = await (await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q))).json();
+    if (r[0]) map.setView([+r[0].lat, +r[0].lon], 16); else showErr('Place not found');
+  } catch (err) { showErr(err); }
+};
+
+$('gpxBtn').onclick = e => { e.preventDefault(); $('gpx').click(); };
+$('gpx').onchange = async () => {
+  const f = $('gpx').files[0]; if (!f) return;
+  const doc = new DOMParser().parseFromString(await f.text(), 'application/xml');
+  const pts = [...doc.querySelectorAll('trkpt, rtept, wpt')].map(n => [+n.getAttribute('lat'), +n.getAttribute('lon')]).filter(p => isFinite(p[0]) && isFinite(p[1]));
+  if (pts.length < 2) return showErr('No points in GPX');
+  $('roads').checked = false; waypoints = pts; redrawRoute(); map.fitBounds(pts); $('gpx').value = '';
+};
+
+function renderSaved() {
+  const list = store.get('routes', []);
+  $('saved').replaceChildren(...list.map((r, i) => {
+    const li = document.createElement('li');
+    const s = document.createElement('span'); s.textContent = `${r.name} (${r.waypoints.length} pts)`;
+    const load = document.createElement('button'); load.textContent = 'Load';
+    load.onclick = () => { waypoints = r.waypoints; $('roads').checked = r.roads; $('profile').value = r.profile; redrawRoute(); map.fitBounds(waypoints); };
+    const del = document.createElement('button'); del.textContent = '✕'; del.className = 'danger';
+    del.onclick = () => { const l = store.get('routes', []); l.splice(i, 1); store.set('routes', l); renderSaved(); };
+    li.append(s, load, del); return li;
+  }));
+}
+$('save').onclick = () => {
+  if (waypoints.length < 2) return showErr('Nothing to save');
+  const l = store.get('routes', []);
+  l.push({ name: $('routeName').value.trim() || `Route ${l.length + 1}`, waypoints, roads: $('roads').checked, profile: $('profile').value });
+  store.set('routes', l); $('routeName').value = ''; renderSaved();
+};
+renderSaved();
+
+let followed = false;
+function applyStatus(s) {
+  lastStatus = s;
+  $('dot').classList.toggle('ok', s.connected);
+  $('devname').textContent = s.connected ? s.device : 'Not connected';
+  if (s.error) showErr(s.error);
+  if (s.position) { me.setLatLng(s.position); if (!map.hasLayer(me)) me.addTo(map); if (!followed) { map.setView(s.position); followed = true; } }
+  else if (map.hasLayer(me)) map.removeLayer(me);
+  $('pause').textContent = s.paused ? 'Resume' : 'Pause';
+  if (s.moving) {
+    $('prog').max = s.total_m || 1; $('prog').value = s.travelled_m;
+    $('moveInfo').textContent = `${s.paused ? 'Paused' : 'Moving'} · ${fmtDist(s.travelled_m)} / ${fmtDist(s.total_m)} · ${s.speed_kmh} km/h · ETA ${fmtTime(s.paused ? null : s.eta_s)}${s.loop ? ' · looping' : ''}`;
+  } else { $('prog').value = 0; $('moveInfo').textContent = s.position ? `At ${s.position[0].toFixed(6)}, ${s.position[1].toFixed(6)}` : ''; }
+}
+// Joystick: drag the pad or hold WASD / arrow keys. Speed comes from the Speed box.
+const stick = $('stick'), knob = $('knob');
+let stickVec = [0, 0], stickSent = '0,0', stickTimer = null, stickLast = 0;
+function sendStick(force) {
+  const key = stickVec.map(v => v.toFixed(2)).join(',');
+  if (key === stickSent && !force) return;
+  const now = Date.now();
+  if (!force && now - stickLast < 80) { clearTimeout(stickTimer); stickTimer = setTimeout(() => sendStick(), 80); return; }
+  stickSent = key; stickLast = now;
+  api('joystick', { east: stickVec[0], north: stickVec[1] }).then(applyStatus).then(() => showErr()).catch(showErr);
+}
+function setStick(x, y, force) {
+  const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; }
+  stickVec = [x, y];
+  knob.style.transform = `translate(${x * 42}px, ${-y * 42}px)`;
+  sendStick(force);
+}
+function stickFromEvent(e) {
+  const r = stick.getBoundingClientRect();
+  setStick((e.clientX - r.left - r.width / 2) / 42, -(e.clientY - r.top - r.height / 2) / 42);
+}
+stick.addEventListener('pointerdown', e => { stick.setPointerCapture(e.pointerId); stick.classList.add('active'); stickFromEvent(e); });
+stick.addEventListener('pointermove', e => { if (stick.classList.contains('active')) stickFromEvent(e); });
+const releaseStick = () => { stick.classList.remove('active'); setStick(0, 0, true); };
+stick.addEventListener('pointerup', releaseStick);
+stick.addEventListener('pointercancel', releaseStick);
+['mousedown', 'dblclick', 'click', 'wheel'].forEach(t => stick.addEventListener(t, e => e.stopPropagation()));
+
+const held = new Set();
+const KEYS = { ArrowUp: [0, 1], KeyW: [0, 1], ArrowDown: [0, -1], KeyS: [0, -1], ArrowLeft: [-1, 0], KeyA: [-1, 0], ArrowRight: [1, 0], KeyD: [1, 0] };
+function keyStick() {
+  let x = 0, y = 0; held.forEach(k => { x += KEYS[k][0]; y += KEYS[k][1]; });
+  setStick(x, y, true);
+}
+document.addEventListener('keydown', e => {
+  if (!KEYS[e.code] || e.target.closest('input, select, textarea')) return;
+  e.preventDefault(); if (!held.has(e.code)) { held.add(e.code); keyStick(); }
+});
+document.addEventListener('keyup', e => { if (held.delete(e.code)) keyStick(); });
+window.addEventListener('blur', () => { if (held.size) { held.clear(); keyStick(); } });
+
+// Poll quickly while moving so the map marker keeps up with fast routes
+async function poll() {
+  await api('status').then(applyStatus).catch(() => {});
+  setTimeout(poll, (lastStatus.moving && !lastStatus.paused) || lastStatus.joystick ? 200 : 1000);
+}
+poll();
+</script>
+</body>
+</html>
